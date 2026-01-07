@@ -435,6 +435,7 @@ async def send_outreach(request: SendOutreachRequest):
     - Live mode (actual sending)
     - Rate limiting
     - Retry logic
+    - Batch processing to prevent timeouts
     """
     logger.info(f"send_outreach called: mode={request.mode}, channel={request.channel}, variant={request.variant}")
 
@@ -446,14 +447,15 @@ async def send_outreach(request: SendOutreachRequest):
             leads = db.get_leads_by_ids(request.lead_ids)
             lead_ids = [l["id"] for l in leads if l["status"] == "MESSAGED"]
         else:
-            leads = db.get_leads_by_status(LeadStatus.MESSAGED, limit=100)
+            # Limit to 25 leads per batch to prevent timeout
+            leads = db.get_leads_by_status(LeadStatus.MESSAGED, limit=25)
             lead_ids = [l["id"] for l in leads]
 
         if not lead_ids:
             return create_success_response(
                 tool_name="send_outreach",
                 message="No messaged leads found for outreach",
-                data={"messages_sent": 0}
+                data={"messages_sent": 0, "remaining": 0}
             )
 
         messages = db.get_messages_by_status(
@@ -463,12 +465,15 @@ async def send_outreach(request: SendOutreachRequest):
         )
 
         messages = [m for m in messages if m["lead_id"] in lead_ids]
+        
+        # Limit messages to prevent timeout (max 50 messages per call)
+        messages = messages[:50]
 
         if not messages:
             return create_success_response(
                 tool_name="send_outreach",
                 message="No messages found to send",
-                data={"messages_sent": 0}
+                data={"messages_sent": 0, "remaining": 0}
             )
 
         # Process messages synchronously to avoid event loop issues
@@ -506,21 +511,27 @@ async def send_outreach(request: SendOutreachRequest):
                 db.update_lead_status(msg.lead_id, LeadStatus.FAILED)
 
         summary = sender.get_summary()
-        logger.info(f"send_outreach complete: sent={sent_count}, failed={failed_count}")
+        
+        # Check if there are more messages to send
+        remaining_leads = db.get_leads_by_status(LeadStatus.MESSAGED, limit=1)
+        remaining_count = len(remaining_leads)
+        
+        logger.info(f"send_outreach complete: sent={sent_count}, failed={failed_count}, remaining={remaining_count}")
         
         return create_success_response(
             tool_name="send_outreach",
-            message=f"Sent {sent_count} messages ({request.mode.value} mode)",
+            message=f"Sent {sent_count} messages ({request.mode.value} mode)" + (f", {remaining_count} more pending" if remaining_count > 0 else ", all done!"),
             data={
                 "messages_sent": sent_count,
                 "messages_failed": failed_count,
                 "mode": request.mode.value,
+                "remaining": remaining_count,
                 "summary": summary
             }
         )
 
     except Exception as e:
-        logger.error(f"send_outreach scheduling failed: {str(e)}")
+        logger.error(f"send_outreach failed: {str(e)}")
         return create_error_response("send_outreach", str(e))
 
 

@@ -405,13 +405,12 @@ def run_full_pipeline(lead_count: int, seed: int, send_mode: str, enrichment_mod
         ("generate_leads", {"count": lead_count, "seed": seed}, "Generating leads..."),
         ("enrich_leads", {"mode": enrichment_mode, "batch_size": 50}, "Enriching leads..."),
         ("generate_messages", {"generate_ab_variants": True}, "Generating messages..."),
-        ("send_outreach", {"mode": send_mode, "rate_limit": rate_limit, "max_retries": 2}, "Sending outreach...")
     ]
     
     for i, (tool_name, params, message) in enumerate(steps):
-        progress = (i / len(steps))
+        progress = (i / (len(steps) + 1))
         progress_bar.progress(progress, text=message)
-        status_text.info(f"Step {i+1}/{len(steps)}: {message}")
+        status_text.info(f"Step {i+1}/{len(steps)+1}: {message}")
         
         result = client.invoke_tool(tool_name, params)
         
@@ -421,10 +420,40 @@ def run_full_pipeline(lead_count: int, seed: int, send_mode: str, enrichment_mod
             st.session_state.pipeline_running = False
             return
         
-        time.sleep(1)  # Brief pause between steps
+        time.sleep(0.5)  # Brief pause between steps
+    
+    # Send outreach in batches to avoid timeout
+    progress_bar.progress(0.75, text="Sending outreach...")
+    status_text.info("Step 4/4: Sending outreach (processing in batches)...")
+    
+    total_sent = 0
+    batch_num = 0
+    max_batches = 20  # Safety limit
+    
+    while batch_num < max_batches:
+        batch_num += 1
+        result = client.invoke_tool("send_outreach", {"mode": send_mode, "rate_limit": rate_limit, "max_retries": 2})
+        
+        if not result or not result.get("success"):
+            error_msg = result.get("error", "Unknown error") if result else "Failed to invoke tool"
+            status_text.error(f"❌ Pipeline failed at send_outreach: {error_msg}")
+            st.session_state.pipeline_running = False
+            return
+        
+        data = result.get("data", {})
+        sent = data.get("messages_sent", 0)
+        remaining = data.get("remaining", 0)
+        total_sent += sent
+        
+        status_text.info(f"📤 Batch {batch_num}: Sent {sent} messages (Total: {total_sent}, Remaining: {remaining})")
+        
+        if remaining == 0 or sent == 0:
+            break
+        
+        time.sleep(0.5)
     
     progress_bar.progress(1.0, text="Pipeline completed!")
-    status_text.success("✅ Pipeline completed successfully!")
+    status_text.success(f"✅ Pipeline completed! Total messages sent: {total_sent}")
     
     st.session_state.pipeline_running = False
     st.session_state.last_refresh = datetime.now()
