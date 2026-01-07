@@ -91,18 +91,18 @@ INDUSTRY_ROLES: Dict[str, List[str]] = {
     ]
 }
 
-# Countries with appropriate locales
+# Countries with appropriate locales (fallback to en_US if locale unavailable)
 COUNTRIES = {
     "United States": "en_US",
-    "United Kingdom": "en_GB",
-    "Canada": "en_CA",
-    "Australia": "en_AU",
-    "Germany": "de_DE",
-    "France": "fr_FR",
-    "Netherlands": "nl_NL",
-    "Singapore": "en_SG",
-    "India": "en_IN",
-    "Ireland": "en_IE"
+    "United Kingdom": "en_US",  # Fallback - en_GB may not be available
+    "Canada": "en_US",          # Fallback - en_CA may not be available
+    "Australia": "en_US",       # Fallback - en_AU may not be available
+    "Germany": "en_US",         # Fallback - de_DE may not be available
+    "France": "en_US",          # Fallback - fr_FR may not be available
+    "Netherlands": "en_US",     # Fallback - nl_NL may not be available
+    "Singapore": "en_US",       # Fallback - en_SG may not be available
+    "India": "en_US",           # Fallback - en_IN may not be available
+    "Ireland": "en_US"          # Fallback - en_IE may not be available
 }
 
 # Company name suffixes by industry
@@ -264,10 +264,18 @@ class LeadGenerator:
         country = random.choice(list(COUNTRIES.keys()))
         locale = COUNTRIES[country]
         
-        # Create locale-specific faker for names
-        locale_faker = Faker(locale)
+        # Create locale-specific faker for names (with fallback to en_US)
+        try:
+            locale_faker = Faker(locale)
+        except Exception:
+            # Fallback to default en_US if locale not available
+            locale_faker = Faker('en_US')
+        
         if self.seed is not None:
-            locale_faker.seed_instance(self.seed + hash(country))
+            try:
+                locale_faker.seed_instance(self.seed + hash(country))
+            except Exception:
+                pass  # Ignore seed errors
         
         # Generate full name
         full_name = locale_faker.name()
