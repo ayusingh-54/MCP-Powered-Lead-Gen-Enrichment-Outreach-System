@@ -62,8 +62,16 @@ class SMTPConfig:
     @classmethod
     def from_env(cls) -> "SMTPConfig":
         """Create config from environment variables."""
+        # Use 'mailhog' hostname when running in Docker, localhost otherwise
+        default_host = "mailhog" if os.getenv("DOCKER_ENV", "false").lower() == "true" else "localhost"
+        smtp_host = os.getenv("SMTP_HOST", default_host)
+        
+        # If SMTP_HOST is localhost but we're in Docker, use mailhog
+        if smtp_host == "localhost" and os.path.exists("/.dockerenv"):
+            smtp_host = "mailhog"
+            
         return cls(
-            host=os.getenv("SMTP_HOST", "localhost"),
+            host=smtp_host,
             port=int(os.getenv("SMTP_PORT", "1025")),
             username=os.getenv("SMTP_USERNAME"),
             password=os.getenv("SMTP_PASSWORD"),

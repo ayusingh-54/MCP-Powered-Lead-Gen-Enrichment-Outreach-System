@@ -12,7 +12,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/mcp/invoke/generate_leads",
+        "url": "http://mcp-server:8000/mcp/invoke/generate_leads",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
@@ -58,7 +58,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/mcp/invoke/enrich_leads",
+        "url": "={{ http://mcp-server:8000 }}/mcp/invoke/enrich_leads",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
@@ -104,7 +104,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/mcp/invoke/generate_messages",
+        "url": "={{ http://mcp-server:8000 }}/mcp/invoke/generate_messages",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
@@ -150,7 +150,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/mcp/invoke/send_outreach",
+        "url": "={{ http://mcp-server:8000 }}/mcp/invoke/send_outreach",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
@@ -204,7 +204,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/mcp/invoke/get_status",
+        "url": "={{ http://mcp-server:8000 }}/mcp/invoke/get_status",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
@@ -392,7 +392,7 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/api/metrics",
+        "url": "={{ http://mcp-server:8000 }}/api/metrics",
         "options": {
           "timeout": 10000
         }
