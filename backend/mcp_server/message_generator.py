@@ -7,8 +7,10 @@ Generates personalized outreach messages for leads:
 - A/B variants for testing
 - References enrichment insights
 - Includes clear CTAs
+- Supports both template-based and AI-powered generation
 """
 
+import os
 import random
 import hashlib
 from datetime import datetime
@@ -20,6 +22,14 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from mcp_server.models import GeneratedMessage
+
+# Try to import OpenAI (optional dependency)
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    openai = None
 
 
 # =============================================================================
@@ -153,18 +163,39 @@ class MessageGenerator:
     """
     Generates personalized outreach messages using templates and lead/enrichment data.
     Ensures messages stay within word limits and reference real insights.
+    Supports both template-based and AI-powered generation (via OpenAI).
     """
     
-    def __init__(self, sender_name: str = "Alex Johnson", seed: Optional[int] = None):
+    def __init__(self, sender_name: str = "Alex Johnson", seed: Optional[int] = None, use_ai: bool = None):
         """
         Initialize message generator.
         
         Args:
             sender_name: Name to use as sender in messages
             seed: Random seed for reproducibility
+            use_ai: Use AI-powered generation if available (defaults to env var OPENAI_ENABLED)
         """
         self.sender_name = sender_name
         self.seed = seed
+        
+        # Determine if AI should be used
+        if use_ai is None:
+            use_ai = os.getenv("OPENAI_ENABLED", "false").lower() == "true"
+        
+        self.use_ai = use_ai and OPENAI_AVAILABLE
+        
+        # Configure OpenAI if available and enabled
+        if self.use_ai:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if api_key:
+                openai.api_key = api_key
+                self.openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+                print(f"MessageGenerator: AI-powered generation enabled (model: {self.openai_model})")
+            else:
+                self.use_ai = False
+                print("MessageGenerator: OpenAI API key not found, falling back to template-based generation")
+        else:
+            print("MessageGenerator: Using template-based generation")
         
         if seed is not None:
             random.seed(seed)
@@ -274,6 +305,123 @@ class MessageGenerator:
         
         return truncated + "..."
     
+    def _generate_with_ai(
+        self,
+        lead: Dict,
+        enrichment: Dict,
+        channel: str,
+        variant: str,
+        max_words: int
+    ) -> Dict[str, str]:
+        """
+        Generate message content using OpenAI API.
+        
+        Args:
+            lead: Lead dictionary
+            enrichment: Enrichment dictionary
+            channel: 'email' or 'linkedin'
+            variant: 'A' or 'B'
+            max_words: Maximum word count
+            
+        Returns:
+            Dictionary with 'subject' (for email) and 'body' keys
+        """
+        if not self.use_ai:
+            return None
+        
+        # Prepare context
+        pain_points = enrichment.get("pain_points", [])
+        triggers = enrichment.get("buying_triggers", [])
+        persona = enrichment.get("persona", "executive")
+        
+        # Build prompt based on channel and variant
+        if channel == "email":
+            approach = "direct and value-focused" if variant == "A" else "consultative and insight-sharing"
+            prompt = f"""Write a personalized cold email for outreach. Requirements:
+
+Lead Details:
+- Name: {lead.get('full_name')}
+- Company: {lead.get('company_name')}
+- Role: {lead.get('role')}
+- Industry: {lead.get('industry')}
+- Persona: {persona}
+
+Context:
+- Pain Point: {pain_points[0] if pain_points else 'operational efficiency'}
+- Buying Trigger: {triggers[0] if triggers else 'growth initiative'}
+
+Instructions:
+1. Write in a {approach} tone
+2. Maximum {max_words} words total
+3. Reference ONE pain point naturally
+4. Include ONE buying trigger context
+5. Clear CTA: "15-minute call"
+6. Use {lead.get('full_name').split()[0]} as first name
+7. Sign off as {self.sender_name}
+8. DO NOT hallucinate company facts
+9. Keep it professional and concise
+
+Format:
+Subject: [write subject line here]
+
+Body:
+[write email body here]"""
+        
+        else:  # linkedin
+            approach = "direct" if variant == "A" else "value-first"
+            prompt = f"""Write a personalized LinkedIn DM. Requirements:
+
+Lead: {lead.get('full_name')}, {lead.get('role')} at {lead.get('company_name')}
+Industry: {lead.get('industry')}
+Persona: {persona}
+Pain Point: {pain_points[0] if pain_points else 'operational challenges'}
+Buying Trigger: {triggers[0] if triggers else 'growth phase'}
+
+Instructions:
+1. {approach} approach
+2. MAXIMUM {max_words} words
+3. Reference pain point briefly
+4. Clear CTA: "15-minute call"
+5. Use first name only: {lead.get('full_name').split()[0]}
+6. Professional but conversational
+7. NO hallucinated facts
+
+Write the message:"""
+        
+        try:
+            response = openai.chat.completions.create(
+                model=self.openai_model,
+                messages=[
+                    {"role": "system", "content": "You are an expert B2B outreach copywriter. Write concise, personalized messages that reference real insights without hallucinating facts."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=300
+            )
+            
+            generated_text = response.choices[0].message.content.strip()
+            
+            # Parse response
+            if channel == "email":
+                # Extract subject and body
+                if "Subject:" in generated_text:
+                    parts = generated_text.split("\n\n", 1)
+                    subject_line = parts[0].replace("Subject:", "").strip()
+                    body = parts[1].strip() if len(parts) > 1 else generated_text
+                else:
+                    # Fallback: first line as subject
+                    lines = generated_text.split("\n")
+                    subject_line = lines[0].strip()
+                    body = "\n".join(lines[1:]).strip()
+                
+                return {"subject": subject_line, "body": body}
+            else:
+                return {"body": generated_text}
+                
+        except Exception as e:
+            print(f"AI generation failed: {e}. Falling back to templates.")
+            return None
+    
     def generate_email(
         self,
         lead: Dict,
@@ -292,14 +440,35 @@ class MessageGenerator:
             GeneratedMessage object
         """
         lead_id = lead.get("id", "")
+        max_words = 120
         
-        # Select template based on variant
-        templates = EMAIL_TEMPLATES_A if variant == "A" else EMAIL_TEMPLATES_B
-        template = self._deterministic_choice(lead_id, templates, f"email_{variant}")
+        # Try AI generation first if enabled
+        ai_result = self._generate_with_ai(lead, enrichment, "email", variant, max_words)
         
-        # Get enrichment data
-        pain_points = enrichment.get("pain_points", ["operational challenges"])
-        triggers = enrichment.get("buying_triggers", [])
+        if ai_result:
+            # Use AI-generated content
+            subject = ai_result["subject"]
+            body = ai_result["body"]
+            word_count = self._count_words(body)
+            
+            # Truncate if needed
+            if word_count > max_words:
+                body = self._truncate_to_word_limit(body, max_words)
+                word_count = self._count_words(body)
+            
+            # Extract pain point and CTA
+            pain_points = enrichment.get("pain_points", ["operational challenges"])
+            referenced_insight = pain_points[0] if pain_points else "business challenges"
+            cta = "15-minute call" if "15" in body else "call"
+            
+        else:
+            # Fall back to template-based generation
+            templates = EMAIL_TEMPLATES_A if variant == "A" else EMAIL_TEMPLATES_B
+            template = self._deterministic_choice(lead_id, templates, f"email_{variant}")
+            
+            # Get enrichment data
+            pain_points = enrichment.get("pain_points", ["operational challenges"])
+            triggers = enrichment.get("buying_triggers", [])
         persona = enrichment.get("persona", "Business Leader")
         
         # Prepare template variables
@@ -355,14 +524,34 @@ class MessageGenerator:
             GeneratedMessage object
         """
         lead_id = lead.get("id", "")
+        max_words = 60
         
-        # Select template based on variant
-        templates = LINKEDIN_TEMPLATES_A if variant == "A" else LINKEDIN_TEMPLATES_B
-        template = self._deterministic_choice(lead_id, templates, f"linkedin_{variant}")
+        # Try AI generation first if enabled
+        ai_result = self._generate_with_ai(lead, enrichment, "linkedin", variant, max_words)
         
-        # Get enrichment data
-        pain_points = enrichment.get("pain_points", ["operational challenges"])
-        triggers = enrichment.get("buying_triggers", [])
+        if ai_result:
+            # Use AI-generated content
+            body = ai_result["body"]
+            word_count = self._count_words(body)
+            
+            # Truncate if needed
+            if word_count > max_words:
+                body = self._truncate_to_word_limit(body, max_words)
+                word_count = self._count_words(body)
+            
+            # Extract pain point and CTA
+            pain_points = enrichment.get("pain_points", ["operational challenges"])
+            referenced_insight = pain_points[0] if pain_points else "business challenges"
+            cta = "15-minute call" if "15" in body else "call"
+            
+        else:
+            # Fall back to template-based generation
+            templates = LINKEDIN_TEMPLATES_A if variant == "A" else LINKEDIN_TEMPLATES_B
+            template = self._deterministic_choice(lead_id, templates, f"linkedin_{variant}")
+            
+            # Get enrichment data
+            pain_points = enrichment.get("pain_points", ["operational challenges"])
+            triggers = enrichment.get("buying_triggers", [])
         persona = enrichment.get("persona", "Business Leader")
         
         # Prepare template variables
