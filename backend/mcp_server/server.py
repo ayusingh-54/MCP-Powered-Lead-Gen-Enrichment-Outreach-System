@@ -426,7 +426,7 @@ async def generate_messages(request: GenerateMessagesRequest):
 
 
 @app.post("/mcp/invoke/send_outreach", response_model=ToolResponse, tags=["MCP Tools"])
-async def send_outreach(request: SendOutreachRequest):
+async def send_outreach(request: SendOutreachRequest, background_tasks: BackgroundTasks):
     """
     MCP Tool: Send outreach messages.
     
@@ -436,103 +436,108 @@ async def send_outreach(request: SendOutreachRequest):
     - Rate limiting
     - Retry logic
     """
+    logger.info(f"send_outreach called: mode={request.mode}, channel={request.channel}, variant={request.variant}")
+
     try:
-        logger.info(f"send_outreach called: mode={request.mode}, channel={request.channel}, variant={request.variant}")
-        
         db = get_db()
-        
-        # Get messages to send
+
+        # Get messages to send (determine candidate leads/messages)
         if request.lead_ids:
-            # Get specific leads
             leads = db.get_leads_by_ids(request.lead_ids)
             lead_ids = [l["id"] for l in leads if l["status"] == "MESSAGED"]
         else:
             leads = db.get_leads_by_status(LeadStatus.MESSAGED, limit=100)
             lead_ids = [l["id"] for l in leads]
-        
+
         if not lead_ids:
             return create_success_response(
                 tool_name="send_outreach",
                 message="No messaged leads found for outreach",
                 data={"messages_sent": 0}
             )
-        
-        # Get messages for these leads
+
         messages = db.get_messages_by_status(
             LeadStatus.MESSAGED,
             channel=request.channel,
             variant=request.variant
         )
-        
-        # Filter to requested leads
+
         messages = [m for m in messages if m["lead_id"] in lead_ids]
-        
+
         if not messages:
             return create_success_response(
                 tool_name="send_outreach",
                 message="No messages found to send",
                 data={"messages_sent": 0}
             )
-        
-        # Create sender
-        sender = OutreachSender(
-            mode=request.mode,
-            rate_limit=request.rate_limit,
-            max_retries=request.max_retries
+
+        # Schedule background task to perform sending to avoid client timeouts
+        def run_send_outreach_background(msgs, lead_list, send_mode, rate_limit, max_retries):
+            try:
+                # Local imports to avoid blocking startup
+                sender = OutreachSender(mode=send_mode, rate_limit=rate_limit, max_retries=max_retries)
+                leads_map = {l["id"]: l for l in lead_list}
+
+                sent_count = 0
+                failed_count = 0
+
+                for msg_data in msgs:
+                    msg = GeneratedMessage(
+                        id=msg_data["id"],
+                        lead_id=msg_data["lead_id"],
+                        channel=msg_data["channel"],
+                        variant=msg_data["variant"],
+                        subject=msg_data.get("subject"),
+                        body=msg_data["body"],
+                        word_count=msg_data.get("word_count", 0),
+                        cta=msg_data.get("cta"),
+                        referenced_insight=msg_data.get("referenced_insight")
+                    )
+
+                    lead = leads_map.get(msg.lead_id)
+                    if not lead:
+                        continue
+
+                    result = sender.send_message(msg, lead)
+                    db.insert_outreach_result(result)
+
+                    if result.status in ["sent", "dry_run"]:
+                        sent_count += 1
+                        db.update_lead_status(msg.lead_id, LeadStatus.SENT)
+                    else:
+                        failed_count += 1
+                        db.update_lead_status(msg.lead_id, LeadStatus.FAILED)
+
+                summary = sender.get_summary()
+                logger.info(f"Background send_outreach complete: sent={sent_count}, failed={failed_count}")
+                # Optionally, store summary in DB or a status cache
+                return True
+            except Exception as ex:
+                logger.error(f"Background send_outreach failed: {ex}")
+                return False
+
+        # Add to background tasks and return immediate response
+        background_tasks.add_task(
+            run_send_outreach_background,
+            messages,
+            leads,
+            request.mode,
+            request.rate_limit,
+            request.max_retries
         )
-        
-        # Create leads map
-        leads_map = {l["id"]: l for l in leads}
-        
-        # Send messages
-        sent_count = 0
-        failed_count = 0
-        
-        for msg_data in messages:
-            # Create GeneratedMessage from dict
-            msg = GeneratedMessage(
-                id=msg_data["id"],
-                lead_id=msg_data["lead_id"],
-                channel=msg_data["channel"],
-                variant=msg_data["variant"],
-                subject=msg_data.get("subject"),
-                body=msg_data["body"],
-                word_count=msg_data["word_count"],
-                cta=msg_data["cta"],
-                referenced_insight=msg_data["referenced_insight"]
-            )
-            
-            lead = leads_map.get(msg.lead_id, {})
-            if not lead:
-                continue
-            
-            result = sender.send_message(msg, lead)
-            db.insert_outreach_result(result)
-            
-            if result.status in ["sent", "dry_run"]:
-                sent_count += 1
-                db.update_lead_status(msg.lead_id, LeadStatus.SENT)
-            else:
-                failed_count += 1
-                db.update_lead_status(msg.lead_id, LeadStatus.FAILED)
-        
-        summary = sender.get_summary()
-        
-        logger.info(f"Sent {sent_count} messages, {failed_count} failed")
-        
+
+        logger.info("send_outreach scheduled as background task")
         return create_success_response(
             tool_name="send_outreach",
-            message=f"Outreach complete: {sent_count} sent, {failed_count} failed",
+            message="Outreach scheduled (running in background)",
             data={
-                "messages_sent": sent_count,
-                "messages_failed": failed_count,
-                "mode": request.mode.value,
-                "summary": summary
+                "messages_scheduled": len(messages),
+                "mode": request.mode.value
             }
         )
-        
+
     except Exception as e:
-        logger.error(f"send_outreach failed: {str(e)}")
+        logger.error(f"send_outreach scheduling failed: {str(e)}")
         return create_error_response("send_outreach", str(e))
 
 
