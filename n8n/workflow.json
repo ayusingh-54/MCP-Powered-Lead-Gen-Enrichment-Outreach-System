@@ -1,0 +1,648 @@
+{
+  "name": "MCP Lead Generation Pipeline",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start-node",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/mcp/invoke/generate_leads",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "count",
+              "value": "={{ $json.lead_count || 200 }}"
+            },
+            {
+              "name": "seed",
+              "value": "={{ $json.seed || null }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "generate-leads",
+      "name": "Generate Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [340, 300],
+      "notesInFlow": true,
+      "notes": "Call MCP generate_leads tool to create synthetic leads"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-generate-success",
+      "name": "Check Generate Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [560, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/mcp/invoke/enrich_leads",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "mode",
+              "value": "={{ $json.enrichment_mode || 'offline' }}"
+            },
+            {
+              "name": "batch_size",
+              "value": "50"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "enrich-leads",
+      "name": "Enrich Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [780, 200],
+      "notesInFlow": true,
+      "notes": "Call MCP enrich_leads tool to add business intelligence"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-enrich-success",
+      "name": "Check Enrich Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/mcp/invoke/generate_messages",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channels",
+              "value": "[\"email\", \"linkedin\"]"
+            },
+            {
+              "name": "generate_ab_variants",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "generate-messages",
+      "name": "Generate Messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1220, 100],
+      "notesInFlow": true,
+      "notes": "Call MCP generate_messages tool to create personalized outreach"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-messages-success",
+      "name": "Check Messages Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1440, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/mcp/invoke/send_outreach",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "mode",
+              "value": "={{ $json.send_mode || 'dry_run' }}"
+            },
+            {
+              "name": "variant",
+              "value": "A"
+            },
+            {
+              "name": "rate_limit",
+              "value": "10"
+            },
+            {
+              "name": "max_retries",
+              "value": "2"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "send-outreach",
+      "name": "Send Outreach",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1660, 0],
+      "notesInFlow": true,
+      "notes": "Call MCP send_outreach tool to deliver messages"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "check-send-success",
+      "name": "Check Send Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1880, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/mcp/invoke/get_status",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "include_leads",
+              "value": "false"
+            },
+            {
+              "name": "include_messages",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "get-final-status",
+      "name": "Get Final Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2100, -100],
+      "notesInFlow": true,
+      "notes": "Get final pipeline metrics"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "completed"
+            },
+            {
+              "name": "message",
+              "value": "Pipeline completed successfully"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [2320, -100]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "failed"
+            },
+            {
+              "name": "error",
+              "value": "={{ $json.error || 'Unknown error occurred' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "error-handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [1100, 500],
+      "notesInFlow": true,
+      "notes": "Handle errors from any step"
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "id": "wait-before-enrich",
+      "name": "Wait Before Enrich",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [780, 300],
+      "webhookId": "wait-enrich"
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "id": "wait-before-messages",
+      "name": "Wait Before Messages",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1220, 200],
+      "webhookId": "wait-messages"
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "id": "wait-before-send",
+      "name": "Wait Before Send",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1660, 100],
+      "webhookId": "wait-send"
+    },
+    {
+      "parameters": {
+        "operation": "formatDate",
+        "date": "={{ $now }}",
+        "format": "yyyy-MM-dd HH:mm:ss",
+        "options": {}
+      },
+      "id": "log-timestamp",
+      "name": "Log Timestamp",
+      "type": "n8n-nodes-base.dateTime",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Agent Decision Logic\n// This node determines the next action based on pipeline state\n\nconst metrics = $input.first().json.metrics || {};\nconst data = $input.first().json.data || {};\n\n// Current state\nconst newLeads = metrics.new_leads || 0;\nconst enrichedLeads = metrics.enriched_leads || 0;\nconst messagedLeads = metrics.messaged_leads || 0;\nconst totalLeads = metrics.total_leads || 0;\n\n// Determine next action\nlet nextAction = 'completed';\nlet shouldContinue = false;\n\nif (totalLeads === 0) {\n  nextAction = 'generate';\n  shouldContinue = true;\n} else if (newLeads > 0) {\n  nextAction = 'enrich';\n  shouldContinue = true;\n} else if (enrichedLeads > 0) {\n  nextAction = 'message';\n  shouldContinue = true;\n} else if (messagedLeads > 0) {\n  nextAction = 'send';\n  shouldContinue = true;\n}\n\nreturn {\n  json: {\n    nextAction,\n    shouldContinue,\n    metrics,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "agent-decision",
+      "name": "Agent Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 400],
+      "notesInFlow": true,
+      "notes": "Agent logic to decide next pipeline step"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "scheduled-trigger",
+      "name": "Scheduled Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 500],
+      "notesInFlow": true,
+      "notes": "Optional: Run pipeline on schedule"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "run-pipeline",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [100, 100],
+      "webhookId": "run-pipeline",
+      "notesInFlow": true,
+      "notes": "Trigger pipeline via HTTP POST"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.data?.leads_enriched || 0 }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "has-enriched-leads",
+      "name": "Has Enriched Leads",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.MCP_SERVER_URL || 'http://localhost:8000' }}/api/metrics",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "poll-metrics",
+      "name": "Poll Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [560, 500],
+      "notesInFlow": true,
+      "notes": "Get current pipeline metrics"
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Log Timestamp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Timestamp": {
+      "main": [
+        [
+          {
+            "node": "Generate Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Leads": {
+      "main": [
+        [
+          {
+            "node": "Check Generate Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Generate Success": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Enrich",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Enrich": {
+      "main": [
+        [
+          {
+            "node": "Enrich Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Leads": {
+      "main": [
+        [
+          {
+            "node": "Check Enrich Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Enrich Success": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Messages",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Messages": {
+      "main": [
+        [
+          {
+            "node": "Generate Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Messages": {
+      "main": [
+        [
+          {
+            "node": "Check Messages Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Messages Success": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Send",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Send": {
+      "main": [
+        [
+          {
+            "node": "Send Outreach",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Outreach": {
+      "main": [
+        [
+          {
+            "node": "Check Send Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Send Success": {
+      "main": [
+        [
+          {
+            "node": "Get Final Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Final Status": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Timestamp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scheduled Trigger": {
+      "main": [
+        [
+          {
+            "node": "Poll Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll Metrics": {
+      "main": [
+        [
+          {
+            "node": "Agent Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "lead-generation",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    },
+    {
+      "name": "mcp",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    }
+  ],
+  "triggerCount": 1,
+  "variables": {},
+  "pinData": {}
+}

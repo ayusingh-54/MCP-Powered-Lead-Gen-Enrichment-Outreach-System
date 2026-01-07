@@ -1,0 +1,765 @@
+{
+  "name": "MCP Lead Generation Pipeline - Production",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start-node",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [100, 400]
+    },
+    {
+      "parameters": {
+        "path": "trigger-pipeline",
+        "httpMethod": "POST",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [100, 600],
+      "webhookId": "lead-gen-trigger"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule (Every 6h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 200],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Initialize pipeline configuration\n// Merge defaults with any incoming parameters\n\nconst defaults = {\n  lead_count: 200,\n  seed: null,\n  enrichment_mode: 'offline',\n  channels: ['email', 'linkedin'],\n  generate_ab_variants: true,\n  send_mode: 'dry_run',\n  rate_limit: 10,\n  batch_size: 50,\n  max_retries: 3\n};\n\n// Get input from trigger (if any)\nconst input = $input.first()?.json || {};\n\n// Merge with defaults\nconst config = { ...defaults, ...input };\n\n// Add metadata\nconfig.pipeline_id = `pipeline_${Date.now()}`;\nconfig.started_at = new Date().toISOString();\nconfig.mcp_server_url = $env.MCP_SERVER_URL || 'http://localhost:8000';\n\nconsole.log('Pipeline Config:', JSON.stringify(config, null, 2));\n\nreturn [{ json: config }];"
+      },
+      "id": "init-config",
+      "name": "Initialize Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [340, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.mcp_server_url }}/health",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "health-check",
+      "name": "Health Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [560, 400],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "health-ok",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "healthy",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-health",
+      "name": "Server Healthy?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [780, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Initialize Config').first().json.mcp_server_url }}/mcp/invoke/generate_leads",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"count\": {{ $('Initialize Config').first().json.lead_count }},\n  \"seed\": {{ $('Initialize Config').first().json.seed || 'null' }}\n}",
+        "options": {
+          "timeout": 180000,
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "generate-leads",
+      "name": "1. Generate Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1020, 300],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Creates synthetic B2B leads using Faker"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate generate_leads response\nconst input = $input.first().json;\n\n// Check for HTTP errors\nif (input.statusCode && input.statusCode !== 200) {\n  throw new Error(`Generate leads failed: HTTP ${input.statusCode} - ${JSON.stringify(input.body)}`);\n}\n\nconst response = input.body || input;\n\nif (!response.success) {\n  throw new Error(`Generate leads failed: ${response.message || 'Unknown error'}`);\n}\n\n// Validate lead count\nif (!response.leads_generated || response.leads_generated === 0) {\n  throw new Error('No leads were generated');\n}\n\nconsole.log(`✅ Generated ${response.leads_generated} leads`);\n\nreturn [{\n  json: {\n    step: 'generate_leads',\n    success: true,\n    leads_generated: response.leads_generated,\n    message: response.message,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "validate-generate",
+      "name": "Validate Generate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "generate-success",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-generate",
+      "name": "Generate OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Initialize Config').first().json.mcp_server_url }}/mcp/invoke/enrich_leads",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"mode\": \"{{ $('Initialize Config').first().json.enrichment_mode }}\",\n  \"batch_size\": {{ $('Initialize Config').first().json.batch_size }}\n}",
+        "options": {
+          "timeout": 300000,
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "enrich-leads",
+      "name": "2. Enrich Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1700, 200],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Adds pain points, persona, buying triggers"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate enrich_leads response\nconst input = $input.first().json;\n\n// Check for HTTP errors\nif (input.statusCode && input.statusCode !== 200) {\n  throw new Error(`Enrich leads failed: HTTP ${input.statusCode} - ${JSON.stringify(input.body)}`);\n}\n\nconst response = input.body || input;\n\nif (!response.success) {\n  throw new Error(`Enrich leads failed: ${response.message || 'Unknown error'}`);\n}\n\nconsole.log(`✅ Enriched ${response.enriched_count} leads`);\n\nreturn [{\n  json: {\n    step: 'enrich_leads',\n    success: true,\n    enriched_count: response.enriched_count,\n    mode: response.mode,\n    message: response.message,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "validate-enrich",
+      "name": "Validate Enrich",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, 200],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "enrich-success",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-enrich",
+      "name": "Enrich OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2140, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Initialize Config').first().json.mcp_server_url }}/mcp/invoke/generate_messages",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channels\": {{ JSON.stringify($('Initialize Config').first().json.channels) }},\n  \"generate_ab_variants\": {{ $('Initialize Config').first().json.generate_ab_variants }},\n  \"batch_size\": {{ $('Initialize Config').first().json.batch_size }}\n}",
+        "options": {
+          "timeout": 300000,
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "generate-messages",
+      "name": "3. Generate Messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2380, 100],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Creates personalized email & LinkedIn messages"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate generate_messages response\nconst input = $input.first().json;\n\n// Check for HTTP errors\nif (input.statusCode && input.statusCode !== 200) {\n  throw new Error(`Generate messages failed: HTTP ${input.statusCode} - ${JSON.stringify(input.body)}`);\n}\n\nconst response = input.body || input;\n\nif (!response.success) {\n  throw new Error(`Generate messages failed: ${response.message || 'Unknown error'}`);\n}\n\nconsole.log(`✅ Generated ${response.messages_generated} messages`);\n\nreturn [{\n  json: {\n    step: 'generate_messages',\n    success: true,\n    messages_generated: response.messages_generated,\n    channels: response.channels,\n    variants: response.variants_generated,\n    message: response.message,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "validate-messages",
+      "name": "Validate Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2600, 100],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "messages-success",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-messages",
+      "name": "Messages OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2820, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Initialize Config').first().json.mcp_server_url }}/mcp/invoke/send_outreach",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"mode\": \"{{ $('Initialize Config').first().json.send_mode }}\",\n  \"rate_limit\": {{ $('Initialize Config').first().json.rate_limit }},\n  \"max_retries\": {{ $('Initialize Config').first().json.max_retries }},\n  \"batch_size\": {{ $('Initialize Config').first().json.batch_size }}\n}",
+        "options": {
+          "timeout": 600000,
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "send-outreach",
+      "name": "4. Send Outreach",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [3060, 0],
+      "continueOnFail": true,
+      "notesInFlow": true,
+      "notes": "Sends messages (dry-run or live mode)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate send_outreach response\nconst input = $input.first().json;\n\n// Check for HTTP errors\nif (input.statusCode && input.statusCode !== 200) {\n  throw new Error(`Send outreach failed: HTTP ${input.statusCode} - ${JSON.stringify(input.body)}`);\n}\n\nconst response = input.body || input;\n\nif (!response.success) {\n  throw new Error(`Send outreach failed: ${response.message || 'Unknown error'}`);\n}\n\nconst successRate = response.sent_count / (response.sent_count + response.failed_count) * 100;\n\nconsole.log(`✅ Sent ${response.sent_count} messages (${response.failed_count} failed)`);\n\nreturn [{\n  json: {\n    step: 'send_outreach',\n    success: true,\n    sent_count: response.sent_count,\n    failed_count: response.failed_count,\n    mode: response.mode,\n    success_rate: successRate.toFixed(2),\n    message: response.message,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "validate-send",
+      "name": "Validate Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3280, 0],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "send-success",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-send",
+      "name": "Send OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3500, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Initialize Config').first().json.mcp_server_url }}/mcp/invoke/get_status",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "get-final-status",
+      "name": "5. Get Final Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [3740, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compile final pipeline summary\nconst config = $('Initialize Config').first().json;\nconst status = $input.first().json;\n\n// Get step results\nconst generateResult = $('Validate Generate').first()?.json || {};\nconst enrichResult = $('Validate Enrich').first()?.json || {};\nconst messagesResult = $('Validate Messages').first()?.json || {};\nconst sendResult = $('Validate Send').first()?.json || {};\n\nconst summary = {\n  pipeline_id: config.pipeline_id,\n  status: 'COMPLETED',\n  started_at: config.started_at,\n  completed_at: new Date().toISOString(),\n  configuration: {\n    lead_count: config.lead_count,\n    enrichment_mode: config.enrichment_mode,\n    channels: config.channels,\n    send_mode: config.send_mode\n  },\n  results: {\n    leads_generated: generateResult.leads_generated || 0,\n    leads_enriched: enrichResult.enriched_count || 0,\n    messages_generated: messagesResult.messages_generated || 0,\n    messages_sent: sendResult.sent_count || 0,\n    messages_failed: sendResult.failed_count || 0,\n    success_rate: sendResult.success_rate || '0'\n  },\n  metrics: status.metrics || {},\n  duration_seconds: Math.round((new Date() - new Date(config.started_at)) / 1000)\n};\n\nconsole.log('🎉 Pipeline completed successfully!');\nconsole.log(JSON.stringify(summary, null, 2));\n\nreturn [{ json: summary }];"
+      },
+      "id": "compile-summary",
+      "name": "Compile Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3960, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Error handler - captures any error and formats it\nconst config = $('Initialize Config').first()?.json || {};\nconst errorInfo = $input.first()?.json || {};\n\n// Determine which step failed\nlet failedStep = 'unknown';\nlet errorMessage = 'Unknown error occurred';\n\ntry {\n  // Check each validation node for errors\n  const nodes = [\n    { name: 'health_check', node: 'Server Healthy?' },\n    { name: 'generate_leads', node: 'Generate OK?' },\n    { name: 'enrich_leads', node: 'Enrich OK?' },\n    { name: 'generate_messages', node: 'Messages OK?' },\n    { name: 'send_outreach', node: 'Send OK?' }\n  ];\n  \n  for (const step of nodes) {\n    try {\n      const result = $(step.node).first()?.json;\n      if (result && result.success === false) {\n        failedStep = step.name;\n        errorMessage = result.message || result.error || 'Step failed';\n        break;\n      }\n    } catch (e) {\n      // Node not executed or error occurred\n    }\n  }\n  \n  // If we still don't know the error, check the error info\n  if (failedStep === 'unknown' && errorInfo.error) {\n    errorMessage = errorInfo.error;\n  }\n} catch (e) {\n  errorMessage = e.message;\n}\n\nconst errorReport = {\n  pipeline_id: config.pipeline_id || 'unknown',\n  status: 'FAILED',\n  failed_at: new Date().toISOString(),\n  started_at: config.started_at || null,\n  error: {\n    step: failedStep,\n    message: errorMessage,\n    details: errorInfo\n  },\n  configuration: {\n    lead_count: config.lead_count,\n    enrichment_mode: config.enrichment_mode,\n    send_mode: config.send_mode\n  },\n  recovery_suggestions: [\n    'Check MCP server logs: docker logs mcp-server',\n    'Verify MCP server is running: curl http://localhost:8000/health',\n    'Check network connectivity between n8n and MCP server',\n    'Review the error message for specific issues',\n    'Try reducing batch_size if timeout errors occur'\n  ]\n};\n\nconsole.error('❌ Pipeline failed!');\nconsole.error(JSON.stringify(errorReport, null, 2));\n\nreturn [{ json: errorReport }];"
+      },
+      "id": "error-handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2380, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Server not healthy error\nconst config = $('Initialize Config').first()?.json || {};\n\nreturn [{\n  json: {\n    pipeline_id: config.pipeline_id,\n    status: 'FAILED',\n    failed_at: new Date().toISOString(),\n    error: {\n      step: 'health_check',\n      message: 'MCP Server is not healthy or not reachable',\n      server_url: config.mcp_server_url\n    },\n    recovery_suggestions: [\n      'Start the MCP server: docker-compose up -d mcp-server',\n      'Check server logs: docker logs mcp-server',\n      `Verify URL is correct: ${config.mcp_server_url}`,\n      'Check firewall/network settings'\n    ]\n  }\n}];"
+      },
+      "id": "server-error",
+      "name": "Server Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1020, 500]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "mergeByFields": {
+          "values": []
+        },
+        "options": {}
+      },
+      "id": "merge-results",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [4180, 200]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "final-output",
+      "name": "Pipeline Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [4400, 200]
+    },
+    {
+      "parameters": {
+        "content": "## 🚀 MCP Lead Generation Pipeline\n\n**This workflow orchestrates the complete lead generation process:**\n\n1. **Generate Leads** - Create synthetic B2B leads\n2. **Enrich Leads** - Add pain points, persona, triggers\n3. **Generate Messages** - Create personalized outreach\n4. **Send Outreach** - Deliver messages (dry-run/live)\n\n**Triggers:**\n- Manual execution\n- Webhook: POST /webhook/trigger-pipeline\n- Schedule: Every 6 hours (disabled by default)\n\n**Configuration:**\nPass parameters via webhook body or edit Initialize Config node.",
+        "height": 420,
+        "width": 320
+      },
+      "id": "sticky-note",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-160, 180]
+    },
+    {
+      "parameters": {
+        "content": "## ⚠️ Error Handling\n\nAll errors flow to the Error Handler node which:\n- Identifies the failed step\n- Captures error details\n- Provides recovery suggestions\n\n**Debug Tips:**\n- Check node outputs\n- Review MCP server logs\n- Verify configuration",
+        "height": 240,
+        "width": 300
+      },
+      "id": "sticky-error",
+      "name": "Error Info",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [2060, 520]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Initialize Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Initialize Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule (Every 6h)": {
+      "main": [
+        [
+          {
+            "node": "Initialize Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Config": {
+      "main": [
+        [
+          {
+            "node": "Health Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Health Check": {
+      "main": [
+        [
+          {
+            "node": "Server Healthy?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Server Healthy?": {
+      "main": [
+        [
+          {
+            "node": "1. Generate Leads",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Server Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Generate Leads": {
+      "main": [
+        [
+          {
+            "node": "Validate Generate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Generate": {
+      "main": [
+        [
+          {
+            "node": "Generate OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate OK?": {
+      "main": [
+        [
+          {
+            "node": "2. Enrich Leads",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Enrich Leads": {
+      "main": [
+        [
+          {
+            "node": "Validate Enrich",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Enrich": {
+      "main": [
+        [
+          {
+            "node": "Enrich OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich OK?": {
+      "main": [
+        [
+          {
+            "node": "3. Generate Messages",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Generate Messages": {
+      "main": [
+        [
+          {
+            "node": "Validate Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Messages": {
+      "main": [
+        [
+          {
+            "node": "Messages OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Messages OK?": {
+      "main": [
+        [
+          {
+            "node": "4. Send Outreach",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Send Outreach": {
+      "main": [
+        [
+          {
+            "node": "Validate Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Send": {
+      "main": [
+        [
+          {
+            "node": "Send OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send OK?": {
+      "main": [
+        [
+          {
+            "node": "5. Get Final Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Get Final Status": {
+      "main": [
+        [
+          {
+            "node": "Compile Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile Summary": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Server Error": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Results": {
+      "main": [
+        [
+          {
+            "node": "Pipeline Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "1",
+      "name": "lead-generation"
+    },
+    {
+      "id": "2",
+      "name": "mcp"
+    },
+    {
+      "id": "3",
+      "name": "automation"
+    }
+  ],
+  "triggerCount": 3,
+  "updatedAt": "2026-01-07T00:00:00.000Z",
+  "versionId": "2.0.0"
+}

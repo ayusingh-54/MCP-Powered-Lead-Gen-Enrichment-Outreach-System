@@ -1,0 +1,116 @@
+# =============================================================================
+# MCP Lead Generation System - Docker Compose Configuration
+# =============================================================================
+# This file defines all services needed to run the complete system
+# 
+# Services:
+#   - mcp-server: FastAPI MCP server (port 8000)
+#   - mailhog: Local SMTP testing server (SMTP: 1025, Web UI: 8025)
+#   - n8n: Workflow automation platform (port 5678)
+#   - frontend: Streamlit dashboard (port 8501)
+#
+# Usage:
+#   docker-compose up -d           # Start all services
+#   docker-compose logs -f         # View logs
+#   docker-compose down            # Stop all services
+# =============================================================================
+
+version: "3.8"
+
+services:
+  # ---------------------------------------------------------------------------
+  # MCP Server - FastAPI backend exposing MCP tools
+  # ---------------------------------------------------------------------------
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-server
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - LOG_LEVEL=INFO
+      - DATABASE_PATH=/app/storage/leads.db
+      - SMTP_HOST=mailhog
+      - SMTP_PORT=1025
+      - SMTP_USE_TLS=false
+      - SMTP_SENDER_EMAIL=outreach@leadgen.demo
+    volumes:
+      - ./storage:/app/storage
+    networks:
+      - leadgen-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Mailhog - Local SMTP server for testing email delivery
+  # ---------------------------------------------------------------------------
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: mailhog
+    ports:
+      - "1025:1025"   # SMTP port
+      - "8025:8025"   # Web UI port
+    networks:
+      - leadgen-network
+
+  # ---------------------------------------------------------------------------
+  # n8n - Workflow automation platform for orchestration
+  # ---------------------------------------------------------------------------
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=false
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=UTC
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n:/home/node/workflows
+    networks:
+      - leadgen-network
+    depends_on:
+      - mcp-server
+
+  # ---------------------------------------------------------------------------
+  # Frontend - Streamlit dashboard for monitoring and control
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - MCP_SERVER_URL=http://mcp-server:8000
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    networks:
+      - leadgen-network
+    depends_on:
+      - mcp-server
+
+# -----------------------------------------------------------------------------
+# Named volumes for persistent data
+# -----------------------------------------------------------------------------
+volumes:
+  n8n_data:
+
+# -----------------------------------------------------------------------------
+# Network for inter-service communication
+# -----------------------------------------------------------------------------
+networks:
+  leadgen-network:
+    driver: bridge
