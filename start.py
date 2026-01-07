@@ -105,12 +105,10 @@ def start_mcp_server():
     """Start the MCP server."""
     print("\n🚀 Starting MCP Server...")
     
-    # Change to backend directory
-    backend_dir = Path(__file__).parent / "backend"
-    
+    # Run from project root with proper module path
     cmd = [
         sys.executable, "-m", "uvicorn",
-        "mcp_server.server:app",
+        "backend.mcp_server.server:app",
         "--host", "0.0.0.0",
         "--port", "8000",
         "--reload"
@@ -118,7 +116,7 @@ def start_mcp_server():
     
     return subprocess.Popen(
         cmd,
-        cwd=str(backend_dir),
+        cwd=str(Path(__file__).parent),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT
     )
